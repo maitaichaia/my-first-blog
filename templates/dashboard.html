@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jira Throughput Forecaster</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242836;
+      --border: #2e3345;
+      --text: #e4e6f0;
+      --muted: #8b8fa3;
+      --primary: #6366f1;
+      --primary-light: #818cf8;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --info: #3b82f6;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 0 32px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+    }
+    header h1 { font-size: 1.5rem; font-weight: 700; }
+    header h1 span { color: var(--primary-light); }
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    select, input, button {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.875rem;
+    }
+    button {
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    button:hover { background: var(--border); }
+    .btn-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+    }
+    .btn-primary:hover { background: var(--primary-light); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 32px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    .card h3 {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .card .value {
+      font-size: 2rem;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .card .sub {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .trend-up { color: var(--success); }
+    .trend-down { color: var(--danger); }
+    .trend-stable { color: var(--muted); }
+
+    .chart-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .chart-section h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .chart-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    @media (max-width: 900px) {
+      .chart-row { grid-template-columns: 1fr; }
+    }
+    .chart-container {
+      position: relative;
+      height: 300px;
+    }
+
+    .forecast-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .forecast-section h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .forecast-form {
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+    .forecast-form label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .percentile-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .percentile-card {
+      text-align: center;
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--surface2);
+    }
+    .percentile-card .pct { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; }
+    .percentile-card .val { font-size: 1.5rem; font-weight: 700; margin: 4px 0; }
+    .percentile-card .unit { font-size: 0.75rem; color: var(--muted); }
+    .p50 .val { color: var(--success); }
+    .p70 .val { color: var(--info); }
+    .p85 .val { color: var(--warning); }
+    .p95 .val { color: var(--danger); }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--muted);
+    }
+    .empty-state p { margin-top: 8px; }
+    .loading { opacity: 0.5; pointer-events: none; }
+
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .status-badge.connected { background: rgba(34,197,94,0.15); color: var(--success); }
+    .status-badge.demo { background: rgba(245,158,11,0.15); color: var(--warning); }
+  </style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1><span>Throughput</span> Forecaster</h1>
+    <div class="controls">
+      <select id="teamSelect">
+        <option value="">Loading teams...</option>
+      </select>
+      <button onclick="syncTeam()">Sync Jira</button>
+      <span id="statusBadge" class="status-badge demo">Demo</span>
+    </div>
+  </header>
+
+  <div id="content">
+    <div class="empty-state">
+      <h2>No team selected</h2>
+      <p>Select a team or create one via the API / admin panel.<br>
+        Run <code>python manage.py generate_demo_data</code> to create demo data.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api';
+let currentTeam = null;
+let dashboardData = null;
+
+async function api(path, options = {}) {
+  const resp = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json', ...options.headers },
+    ...options,
+  });
+  if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+  return resp.json();
+}
+
+async function loadTeams() {
+  try {
+    const data = await api('/teams/');
+    const teams = data.results || data;
+    const sel = document.getElementById('teamSelect');
+    sel.innerHTML = '';
+    if (teams.length === 0) {
+      sel.innerHTML = '<option value="">No teams found</option>';
+      return;
+    }
+    teams.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = t.name;
+      sel.appendChild(opt);
+    });
+    sel.onchange = () => loadDashboard(sel.value);
+    loadDashboard(teams[0].id);
+  } catch (e) {
+    console.error('Failed to load teams:', e);
+  }
+}
+
+async function loadDashboard(teamId) {
+  if (!teamId) return;
+  currentTeam = teamId;
+  const content = document.getElementById('content');
+  content.classList.add('loading');
+
+  try {
+    dashboardData = await api(`/teams/${teamId}/dashboard/`);
+    renderDashboard(dashboardData);
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state"><h2>Error loading data</h2><p>${e.message}</p></div>`;
+  }
+  content.classList.remove('loading');
+}
+
+function renderDashboard(d) {
+  const v = d.velocity;
+  const ct = d.cycle_time;
+  const tp = d.throughput;
+  const trendClass = `trend-${v.trend}`;
+  const trendLabel = v.trend === 'up' ? '↑ Растёт' : v.trend === 'down' ? '↓ Падает' : '→ Стабильно';
+
+  document.getElementById('content').innerHTML = `
+    <div class="grid">
+      <div class="card">
+        <h3>Средняя скорость (velocity)</h3>
+        <div class="value">${v.avg_velocity.toFixed(1)} <small style="font-size:0.5em">SP/спринт</small></div>
+        <div class="sub">σ = ${v.std_velocity.toFixed(1)} · мин ${v.min_velocity.toFixed(0)} / макс ${v.max_velocity.toFixed(0)}</div>
+        <div class="sub ${trendClass}">${trendLabel}</div>
+      </div>
+      <div class="card">
+        <h3>Completion Rate</h3>
+        <div class="value">${(v.avg_completion_rate * 100).toFixed(0)}%</div>
+        <div class="sub">на основе ${v.sprint_count} спринтов</div>
+      </div>
+      <div class="card">
+        <h3>Cycle Time (медиана)</h3>
+        <div class="value">${ct.median_hours > 0 ? (ct.median_hours / 24).toFixed(1) : '—'} <small style="font-size:0.5em">дней</small></div>
+        <div class="sub">p85 = ${ct.p85_hours > 0 ? (ct.p85_hours / 24).toFixed(1) : '—'} дней · ${ct.sample_size} задач</div>
+      </div>
+      <div class="card">
+        <h3>Throughput</h3>
+        <div class="value">${tp.avg_per_sprint.toFixed(1)} <small style="font-size:0.5em">задач/спринт</small></div>
+        <div class="sub">σ = ${tp.std_per_sprint.toFixed(1)} · ${tp.avg_per_day.toFixed(1)} задач/день</div>
+      </div>
+      <div class="card">
+        <h3>Активный спринт</h3>
+        <div class="value">${d.active_sprint.name || '—'}</div>
+        <div class="sub">${d.active_sprint.completed_points} / ${d.active_sprint.committed_points} SP</div>
+      </div>
+      <div class="card">
+        <h3>Бэклог</h3>
+        <div class="value">${d.backlog_size}</div>
+        <div class="sub">открытых задач</div>
+      </div>
+    </div>
+
+    <div class="chart-row">
+      <div class="chart-section">
+        <h2>Velocity по спринтам</h2>
+        <div class="chart-container"><canvas id="velocityChart"></canvas></div>
+      </div>
+      <div class="chart-section">
+        <h2>Ежедневный throughput</h2>
+        <div class="chart-container"><canvas id="throughputChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="forecast-section">
+      <h2>Прогноз (Monte Carlo)</h2>
+      <div class="forecast-form">
+        <label>
+          Кол-во задач
+          <input type="number" id="forecastItems" value="30" min="1" />
+        </label>
+        <label>
+          Длина спринта (дней)
+          <input type="number" id="forecastSprintDays" value="14" min="1" />
+        </label>
+        <label>
+          История (дней)
+          <input type="number" id="forecastHistory" value="90" min="14" />
+        </label>
+        <label>
+          Симуляции
+          <input type="number" id="forecastSims" value="10000" min="100" />
+        </label>
+        <label>
+          &nbsp;
+          <button class="btn-primary" onclick="runForecast()">Рассчитать</button>
+        </label>
+      </div>
+      <div id="forecastResult"></div>
+    </div>
+  `;
+  renderVelocityChart(v.velocities);
+  renderThroughputChart(tp.daily_samples);
+}
+
+function renderVelocityChart(velocities) {
+  const ctx = document.getElementById('velocityChart');
+  if (!ctx) return;
+  const labels = velocities.map((_, i) => `Sprint ${velocities.length - i}`).reverse();
+  const data = [...velocities].reverse();
+  const avg = data.reduce((a, b) => a + b, 0) / data.length;
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Velocity (SP)', data, backgroundColor: 'rgba(99,102,241,0.6)', borderRadius: 4 },
+        { label: 'Среднее', data: data.map(() => avg), type: 'line', borderColor: '#f59e0b', borderDash: [6, 3], pointRadius: 0, borderWidth: 2 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#8b8fa3' } } },
+      scales: {
+        x: { ticks: { color: '#8b8fa3' }, grid: { color: 'rgba(46,51,69,0.5)' } },
+        y: { beginAtZero: true, ticks: { color: '#8b8fa3' }, grid: { color: 'rgba(46,51,69,0.5)' } },
+      }
+    }
+  });
+}
+
+function renderThroughputChart(daily) {
+  const ctx = document.getElementById('throughputChart');
+  if (!ctx || !daily.length) return;
+  const last60 = daily.slice(-60);
+  const labels = last60.map((_, i) => i + 1);
+
+  const movAvg = [];
+  const win = 7;
+  for (let i = 0; i < last60.length; i++) {
+    const start = Math.max(0, i - win + 1);
+    const slice = last60.slice(start, i + 1);
+    movAvg.push(slice.reduce((a, b) => a + b, 0) / slice.length);
+  }
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Задач/день', data: last60, backgroundColor: 'rgba(59,130,246,0.4)', borderRadius: 2 },
+        { label: '7-дневная скользящая', data: movAvg, type: 'line', borderColor: '#22c55e', pointRadius: 0, borderWidth: 2 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#8b8fa3' } } },
+      scales: {
+        x: { ticks: { color: '#8b8fa3', maxTicksLimit: 15 }, grid: { color: 'rgba(46,51,69,0.5)' } },
+        y: { beginAtZero: true, ticks: { color: '#8b8fa3' }, grid: { color: 'rgba(46,51,69,0.5)' } },
+      }
+    }
+  });
+}
+
+async function runForecast() {
+  if (!currentTeam) return;
+  const btn = document.querySelector('.forecast-form .btn-primary');
+  btn.textContent = 'Расчёт...';
+  btn.disabled = true;
+
+  try {
+    const result = await api(`/teams/${currentTeam}/forecast/throughput/`, {
+      method: 'POST',
+      body: JSON.stringify({
+        target_items: parseInt(document.getElementById('forecastItems').value),
+        sprint_length_days: parseInt(document.getElementById('forecastSprintDays').value),
+        history_days: parseInt(document.getElementById('forecastHistory').value),
+        simulations: parseInt(document.getElementById('forecastSims').value),
+      }),
+    });
+    renderForecastResult(result);
+  } catch (e) {
+    document.getElementById('forecastResult').innerHTML =
+      `<div class="empty-state"><p>Ошибка: ${e.message}</p></div>`;
+  }
+  btn.textContent = 'Рассчитать';
+  btn.disabled = false;
+}
+
+function renderForecastResult(r) {
+  const el = document.getElementById('forecastResult');
+
+  const p50s = r.p50_sprints || r.raw_results?.p50_sprints || 0;
+  const p70s = r.p70_sprints || r.raw_results?.p70_sprints || 0;
+  const p85s = r.p85_sprints || r.raw_results?.p85_sprints || 0;
+  const p95s = r.p95_sprints || r.raw_results?.p95_sprints || 0;
+  const p50d = r.p50_days || r.raw_results?.p50_days || 0;
+  const p70d = r.p70_days || r.raw_results?.p70_days || 0;
+  const p85d = r.p85_days || r.raw_results?.p85_days || 0;
+  const p95d = r.p95_days || r.raw_results?.p95_days || 0;
+
+  el.innerHTML = `
+    <div class="percentile-grid">
+      <div class="percentile-card p50">
+        <div class="pct">50-й перцентиль</div>
+        <div class="val">${p50s.toFixed(1)}</div>
+        <div class="unit">спринтов (${p50d.toFixed(0)} дней)</div>
+      </div>
+      <div class="percentile-card p70">
+        <div class="pct">70-й перцентиль</div>
+        <div class="val">${p70s.toFixed(1)}</div>
+        <div class="unit">спринтов (${p70d.toFixed(0)} дней)</div>
+      </div>
+      <div class="percentile-card p85">
+        <div class="pct">85-й перцентиль</div>
+        <div class="val">${p85s.toFixed(1)}</div>
+        <div class="unit">спринтов (${p85d.toFixed(0)} дней)</div>
+      </div>
+      <div class="percentile-card p95">
+        <div class="pct">95-й перцентиль</div>
+        <div class="val">${p95s.toFixed(1)}</div>
+        <div class="unit">спринтов (${p95d.toFixed(0)} дней)</div>
+      </div>
+    </div>
+    <div class="chart-container" style="height:250px"><canvas id="forecastHistogram"></canvas></div>
+  `;
+
+  const hist = r.raw_results?.histogram;
+  if (hist && hist.bins) {
+    new Chart(document.getElementById('forecastHistogram'), {
+      type: 'bar',
+      data: {
+        labels: hist.bins.map(b => `${b}`),
+        datasets: [{
+          label: 'Частота (кол-во симуляций)',
+          data: hist.counts,
+          backgroundColor: 'rgba(99,102,241,0.6)',
+          borderRadius: 2,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#8b8fa3' } } },
+        scales: {
+          x: { title: { display: true, text: 'Спринтов', color: '#8b8fa3' }, ticks: { color: '#8b8fa3' }, grid: { color: 'rgba(46,51,69,0.3)' } },
+          y: { title: { display: true, text: 'Симуляций', color: '#8b8fa3' }, ticks: { color: '#8b8fa3' }, grid: { color: 'rgba(46,51,69,0.3)' } },
+        }
+      }
+    });
+  }
+}
+
+async function syncTeam() {
+  if (!currentTeam) return;
+  try {
+    const badge = document.getElementById('statusBadge');
+    badge.textContent = 'Syncing...';
+    await api(`/teams/${currentTeam}/sync/`, { method: 'POST' });
+    badge.textContent = 'Connected';
+    badge.className = 'status-badge connected';
+    loadDashboard(currentTeam);
+  } catch (e) {
+    alert('Sync error: ' + e.message);
+    document.getElementById('statusBadge').textContent = 'Error';
+  }
+}
+
+loadTeams();
+</script>
+</body>
+</html>
